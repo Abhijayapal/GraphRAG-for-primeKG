@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+neo4j
+faiss-cpu
+numpy
+pydantic
+chainlit
+groq
+python-dotenv
+httpx

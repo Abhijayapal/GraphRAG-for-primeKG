@@ -1,0 +1,11 @@
+{
+    "python.defaultInterpreterPath": "C:\\ml\\Scripts\\python.exe",
+    "python.pythonPath": "C:\\ml\\Scripts\\python.exe",
+    "python.analysis.pythonPath": "C:\\ml\\Scripts\\python.exe",
+    "python.analysis.extraPaths": [
+        "C:\\ml\\Lib\\site-packages"
+    ],
+    "python.analysis.venvPath": "C:\\",
+    "python.venvPath": "C:\\",
+    "python.venvFolders": ["ml"]
+}

@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     rotate_embeddings_path: str = "embeddings/rotate_data/rotate_embeddings.npy"
     rotate_entity_map_path: str = "embeddings/rotate_data/rotate_entity_map.json"
 
+    # PyKEEN trained RotatE model (proper complex embeddings + triple scoring)
+    pykeen_model_path: str = "trained_model.pkl"
+    pykeen_train_csv: str  = "train.csv"
+    pykeen_test_csv: str   = "test.csv"
+
     # Retrieval defaults
     default_top_k: int = 10
     cypher_top_k: int = 50

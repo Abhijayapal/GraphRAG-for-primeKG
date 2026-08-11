@@ -8,3 +8,5 @@ chainlit
 groq
 python-dotenv
 httpx
+pykeen
+torch --index-url https://download.pytorch.org/whl/cpu

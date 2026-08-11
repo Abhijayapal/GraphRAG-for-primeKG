@@ -11,9 +11,12 @@ venv/
 dist/
 build/
 kg_filtered.csv
-.chainlit/
+train.csv
+test.csv
 .mypy_cache/
 .pytest_cache/
 htmlcov/
 coverage.xml
 *.log
+embeddings/rotate_data/triples.tsv
+embeddings/rotate_data/test_triples.tsv

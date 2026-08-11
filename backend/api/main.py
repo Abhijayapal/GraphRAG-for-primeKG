@@ -31,6 +31,7 @@ from backend.retrieval.cypher_ranker import CypherRanker
 from backend.retrieval.hybrid_ranker import HybridRanker
 from backend.retrieval.novel_link_predictor import NovelLinkPredictor
 from backend.embeddings.embedding_searcher import EmbeddingSearcher
+from backend.embeddings.pykeen_searcher import PyKEENSearcher
 from backend.api.routes import health, query, repurpose, explain
 
 configure_logging(settings.log_level)
@@ -51,7 +52,7 @@ async def lifespan(app: FastAPI):
     driver = create_driver()
     app.state.driver = driver
 
-    # FAISS index over RotatE entity embeddings — loaded once into RAM
+    # FAISS index over RotatE entity embeddings — loaded once into RAM (legacy)
     logger.info("Loading RotatE embeddings and building FAISS index")
     searcher = EmbeddingSearcher(
         settings.rotate_embeddings_path,
@@ -61,12 +62,34 @@ async def lifespan(app: FastAPI):
     app.state.searcher = searcher
     logger.info("FAISS index ready")
 
+    # PyKEEN RotatE model — proper triple scoring for drug repurposing
+    import os
+    if os.path.exists(settings.pykeen_model_path):
+        logger.info("Loading PyKEEN RotatE model from %s", settings.pykeen_model_path)
+        pykeen_searcher = PyKEENSearcher(
+            settings.pykeen_model_path,
+            settings.pykeen_train_csv,
+            settings.pykeen_test_csv,
+        )
+        pykeen_searcher.load()
+        app.state.pykeen_searcher = pykeen_searcher
+        novel_predictor_searcher = pykeen_searcher  # use triple scoring
+        logger.info("PyKEEN searcher ready — using proper triple scoring")
+    else:
+        logger.warning(
+            "trained_model.pkl not found at '%s'. "
+            "Falling back to legacy cosine similarity for novel predictions.",
+            settings.pykeen_model_path,
+        )
+        app.state.pykeen_searcher = None
+        novel_predictor_searcher = searcher  # fallback
+
     # Retrieval pipeline components
     app.state.resolver = EntityResolver(driver)
     app.state.retriever = CypherRetriever(driver)
     app.state.cypher_ranker = CypherRanker()
     app.state.hybrid_ranker = HybridRanker()
-    app.state.novel_predictor = NovelLinkPredictor(driver, searcher)
+    app.state.novel_predictor = NovelLinkPredictor(driver, novel_predictor_searcher)
 
     logger.info("All components initialised — API ready")
     yield  # server runs here

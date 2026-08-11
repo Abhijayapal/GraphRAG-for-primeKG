@@ -1,33 +1,24 @@
 """
-NovelLinkPredictor: Drug Repurposing Engine (Week 5b — Mentor-Guided).
+NovelLinkPredictor: Drug Repurposing Engine.
 
-Core biological insight (from mentor):
---------------------------------------
-PrimeKG contains data up to 2019. COVID-19 came in 2020. If we can predict
-"Heparin is a good candidate for Coronavinae infectious disease" using ONLY
-2019 data, then validate it against 2020 clinical literature — that is real
-scientific value. This module does exactly that.
+Core biological insight:
+    PrimeKG contains data up to 2019. COVID-19 came in 2020. If we can predict
+    "Heparin is a good candidate for Coronavinae infectious disease" using ONLY
+    2019 data, then validate it against 2020 clinical literature — that is real
+    scientific value. This module does exactly that.
 
-Why this works:
-  RotatE learned a geometric embedding of the KG where biologically related
-  entities cluster together. Even if no INDICATION edge exists between Drug X
-  and Disease Y, if their embeddings are geometrically close, the model is
-  saying "they share biological context."
+Ensemble Formula (Updated: proper RotatE triple scoring):
+    rotate_score  = PyKEEN score_hrt(drug, indication, disease)  [0..1]
+    fastrp_score  = Neo4j FastRP vector index cosine similarity  [0..1]
+    ensemble      = 0.6 * rotate_score + 0.4 * fastrp_score
+    bio_bonus     = +0.15 if Drug -> Gene -> Disease path exists
+    final         = min(1.0, ensemble + bio_bonus)
 
-  FastRP captures graph topology — drugs that are connected to the same genes
-  as a disease will have similar FastRP embeddings.
-
-  Together, high scores from BOTH models = high confidence novel prediction.
-
-Ensemble Formula:
-  ensemble = 0.6 * rotate_score + 0.4 * fastrp_score
-  bio_bonus = +0.15 if Drug -> Gene -> Disease path exists (mechanistic bridge)
-  final = min(1.0, ensemble + bio_bonus)
-
-WHY no Cypher score in the ensemble:
-  By definition, novel predictions have no INDICATION/OFF_LABEL_USE edge
-  in the graph. CypherRanker finds KNOWN edges. Including it would just
-  give every novel prediction a score of 0 by Cypher — meaningless.
+WHY triple scoring instead of cosine similarity:
+    RotatE entity embeddings live in different geometric spaces for drugs
+    and diseases. Direct cosine similarity Drug vs Disease is meaningless.
+    The learned relation rotation (e.g. 'indication') bridges the two spaces,
+    giving a biologically accurate score via score_hrt().
 """
 
 from __future__ import annotations
@@ -46,7 +37,7 @@ EXISTING_EDGE_RELS = "INDICATION|CONTRAINDICATION|OFF_LABEL_USE"
 DRUG_GENE_RELS = "TARGET|ENZYME|TRANSPORTER|CARRIER"
 
 # Ensemble weights
-W_ROTATE  = 0.6    # RotatE: relation-aware, highest biological signal
+W_ROTATE  = 0.6    # PyKEEN RotatE triple score: relation-aware, highest biological signal
 W_FASTRP  = 0.4    # FastRP: graph topology
 BIO_BONUS = 0.15   # Bonus for mechanistic Drug -> Gene -> Disease path
 
@@ -56,7 +47,7 @@ class NovelLinkPredictor:
     Predicts novel (currently unknown) drug-disease links for drug repurposing.
 
     Usage:
-        predictor = NovelLinkPredictor(driver, rotate_searcher)
+        predictor = NovelLinkPredictor(driver, pykeen_searcher)
         predictions = predictor.predict("Coronavinae infectious disease", top_k=20)
     """
 
@@ -64,10 +55,13 @@ class NovelLinkPredictor:
         """
         Args:
             driver:           Neo4j driver (for FastRP + graph queries).
-            rotate_searcher:  A loaded EmbeddingSearcher instance (for RotatE scores).
+            rotate_searcher:  A loaded PyKEENSearcher instance (for triple scores)
+                              OR legacy EmbeddingSearcher (fallback cosine).
         """
         self._driver = driver
         self._rotate = rotate_searcher
+        # Detect whether we have the new PyKEEN searcher
+        self._use_triple_scoring = hasattr(rotate_searcher, 'score_repurposing')
 
     # -------------------------------------------------------------------------
     # Public API
@@ -135,11 +129,6 @@ class NovelLinkPredictor:
         print(f"  [step 5] Novel candidate drugs: {len(novel_drugs)}")
 
         # Step 6: Score all novel candidates
-        # WHY score in bulk vs one-by-one:
-        #   FastRP scores need one Neo4j query per drug (expensive at 6000+ drugs)
-        #   so we batch-fetch top-K by FastRP similarity from the vector index,
-        #   then only score RotatE for those top candidates.
-        #   This reduces runtime from minutes to seconds.
         print(f"  [step 6] Scoring top candidates via FastRP vector index...")
         fastrp_candidates = self._batch_fastrp_scores(disease_fastrp, top_k=100)
 
@@ -149,18 +138,18 @@ class NovelLinkPredictor:
         ]
 
         # Step 7: Score RotatE for each FastRP candidate
-        # WHY only for FastRP top-100: RotatE requires looking up embeddings from
-        # the in-memory numpy array — fast, but we limit to top candidates for clarity.
         print(f"  [step 7] Adding RotatE scores for {len(fastrp_candidates)} candidates...")
         scored = []
         for item in fastrp_candidates:
-            drug_name = item["name"]
+            drug_name    = item["name"]
             fastrp_score = item["score"]
 
-            if disease_in_rotate:
-                rotate_score = self._rotate_cosine(drug_name, disease_name)
+            # Use proper triple scoring if PyKEENSearcher is available
+            if self._use_triple_scoring:
+                rotate_score = self._rotate.score_repurposing(drug_name, disease_name)
             else:
-                rotate_score = 0.0
+                # Legacy fallback: cosine similarity
+                rotate_score = self._rotate_cosine(drug_name, disease_name)
 
             ensemble = W_ROTATE * rotate_score + W_FASTRP * fastrp_score
 

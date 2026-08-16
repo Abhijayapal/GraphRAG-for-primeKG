@@ -155,7 +155,7 @@ class PyKEENSearcher:
             scores = [self._score_hrt(drug_idx, r, disease_idx) for r in rel_indices]
             raw = float(sum(scores) / len(scores))
             norm = float(torch.sigmoid(torch.tensor(raw)).item())
-            results.append({"drug": drug_name, "rotate_score": norm})
+            results.append({"name": drug_name, "rotate_score": norm})
 
         results.sort(key=lambda x: -x["rotate_score"])
         return results[:top_k]
@@ -177,20 +177,23 @@ class PyKEENSearcher:
         return float(score.item())
 
     def _build_maps(self) -> None:
-        """Rebuild entity_to_id and relation_to_id from CSV files."""
-        entities  = set()
-        relations = set()
-
-        for csv_path in [self._train_csv, self._test_csv]:
-            try:
-                with open(csv_path, "r", encoding="utf-8") as f:
-                    for row in csv.DictReader(f):
-                        entities.add(row["x_name"].strip())
-                        entities.add(row["y_name"].strip())
-                        relations.add(row["display_relation"].strip())
-            except FileNotFoundError:
-                logger.warning("CSV not found: %s", csv_path)
-
-        # PyKEEN assigns IDs alphabetically
-        self._entity_to_id   = {n: i for i, n in enumerate(sorted(entities))}
-        self._relation_to_id = {r: i for i, r in enumerate(sorted(relations))}
+        """Load entity_to_id and relation_to_id from exported JSON maps."""
+        import json
+        import os
+        
+        # Determine the directory of the model path
+        model_dir = os.path.dirname(self._model_path)
+        if not model_dir:
+            model_dir = "embeddings/rotate_data"
+            
+        entity_map_path = os.path.join(model_dir, "rotate_entity_map.json")
+        relation_map_path = os.path.join(model_dir, "rotate_relation_map.json")
+        
+        try:
+            with open(entity_map_path, "r", encoding="utf-8") as f:
+                self._entity_to_id = json.load(f)
+            with open(relation_map_path, "r", encoding="utf-8") as f:
+                self._relation_to_id = json.load(f)
+        except FileNotFoundError as e:
+            logger.error("Map JSON not found! Make sure to run dump_relation_map.py. Error: %s", e)
+            raise

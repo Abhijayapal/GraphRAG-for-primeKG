@@ -13,17 +13,9 @@
 
 | Operation | p50 | p95 |
 |---|---|---|
-| Entity resolution (Cypher) | 15 ms | 35 ms |
-| Cypher graph traversal (50 paths) | 90 ms | 200 ms |
-| FAISS ANN search | < 2 ms | < 5 ms |
-| RRF fusion (Python, in-memory) | < 1 ms | < 1 ms |
-| **POST /query (end-to-end)** | **~110 ms** | **~240 ms** |
-| **POST /repurpose** | **~1.8 s** | **~3 s** |
-| Application startup | ~3 s | — |
+| **POST /query (end-to-end)** | **~7.5 s** | **~8.7 s** |
 
-**Bottleneck:** Neo4j Cypher traversal dominates `/query` latency. FAISS is negligible.
-
-**`/repurpose` is slower** because it runs two Cypher queries (all drugs, existing edges) and a plausibility check for each top-K candidate before returning.
+**Bottleneck:** Neo4j Cypher traversal dominates `/query` latency because the graph contains 8M edges and local desktop Neo4j is unoptimized. RotatE scoring takes ~0.5s.
 
 ---
 
@@ -57,14 +49,13 @@ All of this happens once in the `lifespan` context manager before the server acc
 
 ## Retrieval Quality
 
-Bootstrap edge-recovery experiment (100 random edges deleted, system asked to recover them):
+Tested on 50 ground-truth disease-drug indication pairs from PrimeKG.
 
 | Metric | Value |
 |---|---|
-| Average Hit@20 | 47% |
-| Best single run | 80% |
-| Random baseline (20 / ~6,600 drugs) | 0.3% |
-| Improvement over random | ~157× |
+| **Recall@1** | 12.0% |
+| **Recall@5** | 32.0% |
+| **Recall@10** | 50.0% |
 
 ---
 

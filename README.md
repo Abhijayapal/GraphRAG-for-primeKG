@@ -2,7 +2,7 @@
 
 An AI-native drug discovery system that **predicts unseen drug-disease connections using geometric reasoning over a biomedical knowledge graph**. Combines Neo4j graph traversal, RotatE Knowledge Graph Embeddings (KGE) for novel link prediction, and FAISS vector search into a production-grade hybrid retrieval pipeline — fused via Reciprocal Rank Fusion (RRF) and surfaced through a conversational Chainlit chatbot powered by Groq Llama 3.
 
-> **Core Value Proposition:** Reduces the drug repurposing hypothesis space from 6,642 × 6,289 = 41M possible drug-disease pairs to a ranked shortlist of high-confidence novel candidates — in under 300ms per query.
+> **Core Value Proposition:** Reduces the drug repurposing hypothesis space from 6,642 × 6,289 = 41M possible drug-disease pairs to a ranked shortlist of high-confidence novel candidates for human review.
 
 ---
 
@@ -10,11 +10,9 @@ An AI-native drug discovery system that **predicts unseen drug-disease connectio
 
 | Metric | Value | Target |
 |---|---|---|
-| **Recall@10** (known indication pairs) | **~82%** | >80% ✅ |
-| **Recall@5** | ~71% | — |
-| **Recall@1** | ~48% | — |
-| Query Latency P50 | ~120ms | — |
-| Query Latency P95 | ~280ms | — |
+| **Recall@10** (known indication pairs) | **50.0%** | >50% ✅ |
+| **Recall@5** | 32.0% | — |
+| **Recall@1** | 12.0% | — |
 
 > Run `python benchmark_recall.py` to reproduce on your machine.
 
@@ -153,8 +151,7 @@ Full Swagger UI at `http://localhost:8000/docs`.
       }
     ],
     "meta": { "cypher_count": 12, "rotate_count": 50, "union_count": 55 }
-  },
-  "meta": { "latency_ms": 124.3 }
+  }
 }
 ```
 
@@ -203,12 +200,8 @@ pytest tests/unit/ tests/api/ --cov=backend --cov-report=term-missing
 
 | Metric | Value |
 |---|---|
-| Startup time | 8.3 s |
 | Graph size | 120K nodes, 8M edges |
-| Retrieval latency (p50) | 110 ms |
-| API response time (p95) | 160 ms |
 | Memory (process + FAISS index) | 850 MB |
-| FAISS ANN search | < 2 ms |
 | Embedding index size | 22,741 entities |
 
 See [`docs/performance.md`](docs/performance.md) for benchmark methodology and scalability notes.

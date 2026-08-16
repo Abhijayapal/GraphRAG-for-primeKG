@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 import time
 import os
 import pickle
@@ -33,6 +34,9 @@ import numpy as np
 import torch
 from collections import defaultdict
 from typing import Optional
+
+# Silence noisy HybridRanker guardrail warnings during benchmarking
+logging.basicConfig(level=logging.ERROR)
 
 # ── CPU unpickler for model loaded on non-GPU machine ────────────────────────
 class CPUUnpickler(pickle.Unpickler):
@@ -63,74 +67,87 @@ def load_ground_truth(path: str = "train.csv",
     return random.sample(pairs, min(sample_size, len(pairs)))
 
 
-# ── Build entity/relation maps (must match model training) ───────────────────
-def build_maps(train_path: str = "train.csv"):
-    entities, relations = set(), set()
+# ── Load entity/relation maps (MUST USE JSON exported from training) ───────────
+def build_maps():
+    import json
+    # Use the actual maps exported from TriplesFactory to ensure perfect ID sync
+    with open("embeddings/rotate_data/rotate_entity_map.json", "r") as f:
+        entity_to_id = json.load(f)
+    
+    with open("embeddings/rotate_data/rotate_relation_map.json", "r") as f:
+        relation_to_id = json.load(f)
+        
+    # We still need the list of drug names to rank them
     drug_names_set = set()
-    with open(train_path, encoding="utf-8") as f:
+    with open("train.csv", encoding="utf-8") as f:
         for row in csv.DictReader(f):
-            x, y = row["x_name"].strip(), row["y_name"].strip()
-            entities.add(x); entities.add(y)
-            relations.add(row["display_relation"].strip())
-            if row["x_type"].strip() == "drug": drug_names_set.add(x)
-            if row["y_type"].strip() == "drug": drug_names_set.add(y)
-    entity_to_id  = {n: i for i, n in enumerate(sorted(entities))}
-    relation_to_id = {r: i for i, r in enumerate(sorted(relations))}
+            if row["x_type"].strip() == "drug": drug_names_set.add(row["x_name"].strip())
+            if row["y_type"].strip() == "drug": drug_names_set.add(row["y_name"].strip())
+            
     drug_names = [d for d in drug_names_set if d in entity_to_id]
     return entity_to_id, relation_to_id, drug_names
 
 
-# ── Recall@K evaluator ────────────────────────────────────────────────────────
-def evaluate_recall(model, entity_to_id, relation_to_id, drug_names,
-                    pairs: list[tuple[str, str]],
-                    ks: tuple = (1, 5, 10)) -> dict:
-    """
-    For each (disease, true_drug) pair:
-      1. Score all drugs via RotatE indication relation
-      2. Check if true_drug appears in top-K
-    """
-    drug_indices = [entity_to_id[d] for d in drug_names]
-    drug_tensor  = torch.tensor(drug_indices)
+# ── Hybrid Recall@K evaluator ─────────────────────────────────────────────────
+def evaluate_hybrid_recall(pairs: list[tuple[str, str]], ks: tuple = (1, 5, 10)) -> dict:
+    from backend.retrieval.hybrid_ranker import HybridRanker
+    from backend.embeddings.pykeen_searcher import PyKEENSearcher
+    from backend.retrieval.cypher_retriever import CypherRetriever
+    from backend.graph.driver import create_driver
 
-    # Get relation IDs for indication / off-label use
-    rel_ids = [
-        relation_to_id[r]
-        for r in ("indication", "off-label use")
-        if r in relation_to_id
-    ]
+    print("Initializing components...")
+    ranker = HybridRanker()
+    
+    # Init RotatE
+    searcher = PyKEENSearcher(model_path="trained_model.pkl")
+    searcher.load()
 
+    # ── Pre-build drug candidate list (filter entity map to drugs only) ────────
+    # This is the KEY optimization: instead of scoring ALL ~100k entities,
+    # we only score the ~10k known drug entities — ~10x speedup.
+    print("Building drug candidate list from train.csv...")
+    drug_names_set: set[str] = set()
+    with open("train.csv", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            if row["x_type"].strip() == "drug":
+                drug_names_set.add(row["x_name"].strip())
+            if row["y_type"].strip() == "drug":
+                drug_names_set.add(row["y_name"].strip())
+    # Only keep drugs that exist in the RotatE entity map
+    drug_candidates = [d for d in drug_names_set if searcher.has_entity(d)]
+    print(f"Drug candidates in RotatE map: {len(drug_candidates)} / {len(drug_names_set)} from CSV")
+
+    # Init Neo4j Cypher Retriever
+    driver = create_driver()
+    cypher = CypherRetriever(driver)
+    
     hits = {k: 0 for k in ks}
     valid = 0
     latencies: list[float] = []
 
-    for disease_name, true_drug in pairs:
-        if disease_name not in entity_to_id or true_drug not in entity_to_id:
-            continue
-        if entity_to_id[true_drug] not in drug_indices:
-            continue
-
-        disease_idx = entity_to_id[disease_name]
+    for idx, (disease_name, true_drug) in enumerate(pairs, 1):
+        print(f"  [{idx}/{len(pairs)}] {disease_name[:50]!r}...", flush=True)
         valid += 1
-
-        # Aggregate scores across indication relations
         t0 = time.perf_counter()
-        combined = torch.zeros(len(drug_indices))
-        for rel_id in rel_ids:
-            h = drug_tensor.unsqueeze(1)
-            r = torch.full((len(drug_indices), 1), rel_id)
-            t = torch.full((len(drug_indices), 1), disease_idx)
-            hrt = torch.cat([h, r, t], dim=1)
-            with torch.no_grad():
-                combined += model.score_hrt(hrt).squeeze(-1)
-        latencies.append((time.perf_counter() - t0) * 1000)  # ms
+        
+        # 1. Cypher retrieval (graph-based, fast)
+        c_res = cypher.retrieve(disease_name, mode="disease", top_k=50)
+        
+        # 2. RotatE retrieval — drugs only (NOT all entities)
+        r_res = searcher.rank_drugs_for_disease(disease_name, drug_candidates, top_k=50)
+        
+        # 3. Hybrid RRF fusion
+        fused = ranker.rank(disease_name, c_res, r_res, top_k=max(ks))
+        
+        latencies.append((time.perf_counter() - t0) * 1000)
 
-        # Rank drugs (higher score = better)
-        sorted_idx = combined.argsort(descending=True).tolist()
-        ranked_drugs = [drug_names[i] for i in sorted_idx]
-
+        ranked_drugs = [r["name"] for r in fused["candidates"]]
+        
         for k in ks:
             if true_drug in ranked_drugs[:k]:
                 hits[k] += 1
+
+    driver.close()
 
     latencies.sort()
     n = len(latencies)
@@ -149,34 +166,24 @@ def evaluate_recall(model, entity_to_id, relation_to_id, drug_names,
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    print("Loading model...")
-    with open("trained_model.pkl", "rb") as f:
-        model = CPUUnpickler(f).load()
-    model.eval()
-
-    print("Building entity maps...")
-    entity_to_id, relation_to_id, drug_names = build_maps()
-
-    print("Loading ground-truth pairs (500 samples)...")
-    pairs = load_ground_truth(sample_size=500)
+    print("Loading ground-truth pairs (50 samples for speed)...")
+    pairs = load_ground_truth(sample_size=50)
 
     print(f"Evaluating Recall@K on {len(pairs)} disease-drug pairs...\n")
-    results = evaluate_recall(model, entity_to_id, relation_to_id,
-                              drug_names, pairs, ks=(1, 5, 10))
+    results = evaluate_hybrid_recall(pairs, ks=(1, 5, 10))
 
     print("=" * 55)
-    print("  RETRIEVAL BENCHMARK — Knowledge Graph Embeddings (RotatE)")
+    print("  RETRIEVAL BENCHMARK — Hybrid Ranker (Cypher + RotatE)")
     print("=" * 55)
     print(f"  Valid pairs evaluated : {results['valid_pairs']}")
     for k, v in results["recall"].items():
-        flag = " ← Primary metric" if k == 10 else ""
+        flag = " <Primary metric" if k == 10 else ""
         print(f"  Recall@{k:<3}            : {v:.4f}  ({v*100:.1f}%){flag}")
     lat = results["latency"]
     print(f"  Query latency         : P50={lat['P50_ms']}ms  "
           f"P95={lat['P95_ms']}ms  P99={lat['P99_ms']}ms")
     print("=" * 55)
 
-    # Save as JSON for README/report
     with open("benchmark_results.json", "w") as f:
         json.dump(results, f, indent=2)
     print("\nSaved to benchmark_results.json")

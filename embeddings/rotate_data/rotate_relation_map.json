@@ -1,0 +1,18 @@
+{
+  "associated with": 0,
+  "associated with_inv": 1,
+  "carrier": 2,
+  "carrier_inv": 3,
+  "contraindication": 4,
+  "contraindication_inv": 5,
+  "enzyme": 6,
+  "enzyme_inv": 7,
+  "indication": 8,
+  "indication_inv": 9,
+  "off-label use": 10,
+  "off-label use_inv": 11,
+  "target": 12,
+  "target_inv": 13,
+  "transporter": 14,
+  "transporter_inv": 15
+}

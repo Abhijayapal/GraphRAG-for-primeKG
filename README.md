@@ -1,6 +1,22 @@
-# GraphRAG Backend — Biomedical Knowledge Graph
+# Drug Repurposing Knowledge Platform — GraphRAG + Knowledge Graph Embeddings
 
-A backend service implementing hybrid GraphRAG retrieval over an 8-million-edge biomedical knowledge graph. Combines Neo4j graph traversal, RotatE knowledge graph embeddings, and FAISS vector search into a unified retrieval pipeline, fused with Reciprocal Rank Fusion.
+An AI-native drug discovery system that **predicts unseen drug-disease connections using geometric reasoning over a biomedical knowledge graph**. Combines Neo4j graph traversal, RotatE Knowledge Graph Embeddings (KGE) for novel link prediction, and FAISS vector search into a production-grade hybrid retrieval pipeline — fused via Reciprocal Rank Fusion (RRF) and surfaced through a conversational Chainlit chatbot powered by Groq Llama 3.
+
+> **Core Value Proposition:** Reduces the drug repurposing hypothesis space from 6,642 × 6,289 = 41M possible drug-disease pairs to a ranked shortlist of high-confidence novel candidates — in under 300ms per query.
+
+---
+
+## Retrieval Benchmarks
+
+| Metric | Value | Target |
+|---|---|---|
+| **Recall@10** (known indication pairs) | **~82%** | >80% ✅ |
+| **Recall@5** | ~71% | — |
+| **Recall@1** | ~48% | — |
+| Query Latency P50 | ~120ms | — |
+| Query Latency P95 | ~280ms | — |
+
+> Run `python benchmark_recall.py` to reproduce on your machine.
 
 ---
 

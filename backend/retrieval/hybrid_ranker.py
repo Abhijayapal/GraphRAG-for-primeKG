@@ -14,6 +14,10 @@ WHY RRF instead of weighted score averaging:
 Source weights:
     cypher: 0.6  — explicit graph paths, highest factual trust
     rotate: 0.4  — relation-aware KGE, captures latent patterns
+
+Guardrails:
+    LOW_CONFIDENCE_THRESHOLD  — results below this score are flagged, not dropped
+    NOVEL_LINK_CONFIDENCE_MIN — novel predictions below this are marked unvalidated
 """
 
 from __future__ import annotations
@@ -29,6 +33,15 @@ _WEIGHTS: dict[str, float] = {
     "cypher": 0.6,
     "rotate": 0.4,
 }
+
+# ── Guardrail thresholds ─────────────────────────────────────────────────────
+# Results below LOW_CONFIDENCE_THRESHOLD are flagged as low-confidence (not dropped)
+# so the LLM layer can communicate uncertainty to the user.
+LOW_CONFIDENCE_THRESHOLD: float = 0.004   # ~RRF score of rank-200
+
+# Novel predictions from RotatE only (no Cypher path) are flagged as unvalidated
+# unless their score exceeds this threshold.
+NOVEL_LINK_CONFIDENCE_MIN: float = 0.006  # ~RRF score of rank-100
 
 
 class HybridRanker:
@@ -105,6 +118,31 @@ class HybridRanker:
 
         scored.sort(key=lambda x: (-x["hybrid_score"], x["name"].lower()))
 
+        # ── Guardrail: flag low-confidence and unvalidated novel results ──────
+        for item in scored:
+            item["low_confidence"] = item["hybrid_score"] < LOW_CONFIDENCE_THRESHOLD
+
+            # A result sourced ONLY from RotatE (no Cypher graph path) is a
+            # novel link prediction — flag it clearly so downstream layers
+            # can communicate uncertainty to the user.
+            is_novel_only = item["sources"] == ["rotate"]
+            item["novel_unvalidated"] = (
+                is_novel_only
+                and item["hybrid_score"] < NOVEL_LINK_CONFIDENCE_MIN
+            )
+
+            if item["low_confidence"]:
+                logger.warning(
+                    "Low-confidence result: '%s' score=%.6f (threshold=%.6f)",
+                    item["name"], item["hybrid_score"], LOW_CONFIDENCE_THRESHOLD
+                )
+            if item["novel_unvalidated"]:
+                logger.warning(
+                    "Unvalidated novel prediction: '%s' — no graph path found, "
+                    "low geometric confidence. Flag for human review.",
+                    item["name"]
+                )
+
         logger.debug(
             "HybridRanker: query='%s' cypher=%d rotate=%d union=%d returning=%d",
             disease_name,
@@ -114,12 +152,19 @@ class HybridRanker:
             min(top_k, len(scored)),
         )
 
+        top_results = scored[:top_k]
+        low_conf_count = sum(1 for r in top_results if r["low_confidence"])
+        novel_count    = sum(1 for r in top_results if r["novel_unvalidated"])
+
         return {
-            "candidates": scored[:top_k],
+            "candidates": top_results,
             "meta": {
-                "cypher_count": len(cypher_rank_map),
-                "rotate_count": len(rotate_rank_map),
-                "union_count": len(all_entities),
+                "cypher_count":        len(cypher_rank_map),
+                "rotate_count":        len(rotate_rank_map),
+                "union_count":         len(all_entities),
+                "low_confidence_count": low_conf_count,
+                "novel_unvalidated_count": novel_count,
+                "guardrail_threshold":  LOW_CONFIDENCE_THRESHOLD,
             },
         }
 

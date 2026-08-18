@@ -78,7 +78,7 @@ def detect_intent(user_message: str) -> dict:
             {"role": "user", "content": user_message},
         ],
         temperature=0,
-        max_tokens=200,
+        max_tokens=2000,
     )
     content = response.choices[0].message.content or ""
     import re
@@ -197,12 +197,39 @@ Answer strictly using the format specified. Use ONLY the above data."""
             {"role": "user", "content": user_content},
         ],
         temperature=0.2,
-        max_tokens=1000,
+        max_tokens=2000,
         stream=True,
     )
+    in_think = False
+    buffer = ""
     for chunk in stream:
         token = chunk.choices[0].delta.content or ""
-        yield token
+        buffer += token
+        
+        while buffer:
+            if not in_think:
+                idx = buffer.find("<think>")
+                if idx != -1:
+                    if idx > 0:
+                        yield buffer[:idx]
+                    buffer = buffer[idx + 7:]
+                    in_think = True
+                else:
+                    if any(buffer.endswith(p) for p in ["<", "<t", "<th", "<thi", "<thin", "<think"]):
+                        break
+                    yield buffer
+                    buffer = ""
+                    break
+            else:
+                idx = buffer.find("</think>")
+                if idx != -1:
+                    buffer = buffer[idx + 8:]
+                    in_think = False
+                else:
+                    buffer = ""
+                    break
+    if not in_think and buffer and not any(buffer.startswith(p) for p in ["<", "<t", "<th", "<thi", "<thin", "<think"]):
+        yield buffer
 
 
 # ── Chainlit event handlers ───────────────────────────────────────────────────

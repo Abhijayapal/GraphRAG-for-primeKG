@@ -99,13 +99,12 @@ class NovelLinkPredictor:
         """
         print(f"\n[NovelLinkPredictor] Disease: '{disease_name}'")
 
-        # Step 1: Get disease FastRP embedding to score candidates
+        # Step 1: Try FastRP embedding (requires Neo4j GDS — not available on free Aura)
         disease_fastrp = self._get_fastrp_embedding(disease_name)
-        if disease_fastrp is None:
-            raise ValueError(
-                f"Disease '{disease_name}' has no FastRP embedding. "
-                "Run GDSEmbedder first."
-            )
+        use_fastrp = disease_fastrp is not None
+        if not use_fastrp:
+            print(f"  [info] No FastRP embedding for '{disease_name}'. "
+                  "Falling back to RotatE-only scoring.")
 
         # Step 2: Check disease is in RotatE entity map
         try:
@@ -115,6 +114,11 @@ class NovelLinkPredictor:
             disease_in_rotate = False
             print(f"  [warn] '{disease_name}' not in RotatE entity map. "
                   "RotatE scores will be 0 for all candidates.")
+
+        if not use_fastrp and not disease_in_rotate:
+            raise ValueError(
+                f"Disease '{disease_name}' not found in knowledge graph embeddings."
+            )
 
         # Step 3: Fetch all drug names from Neo4j
         all_drugs = self._get_all_drug_names()
@@ -128,19 +132,27 @@ class NovelLinkPredictor:
         novel_drugs = [d for d in all_drugs if d not in known_drugs]
         print(f"  [step 5] Novel candidate drugs: {len(novel_drugs)}")
 
-        # Step 6: Score all novel candidates
-        print(f"  [step 6] Scoring top candidates via FastRP vector index...")
-        fastrp_candidates = self._batch_fastrp_scores(disease_fastrp, top_k=100)
+        # Step 6: Get candidates via FastRP vector index OR RotatE cosine fallback
+        if use_fastrp:
+            print(f"  [step 6] Scoring top candidates via FastRP vector index...")
+            fastrp_candidates = self._batch_fastrp_scores(disease_fastrp, top_k=100)
+            # Filter to only novel drugs (exclude already-known)
+            fastrp_candidates = [
+                c for c in fastrp_candidates if c["name"] not in known_drugs
+            ]
+        else:
+            # RotatE-only fallback: score all novel drugs by cosine similarity
+            print(f"  [step 6] FastRP unavailable — scoring via RotatE cosine fallback...")
+            fastrp_candidates = [
+                {"name": drug, "score": 0.0} for drug in novel_drugs
+            ]
 
-        # Filter to only novel drugs (exclude already-known)
-        fastrp_candidates = [
-            c for c in fastrp_candidates if c["name"] not in known_drugs
-        ]
-
-        # Step 7: Score RotatE for each FastRP candidate
-        print(f"  [step 7] Adding RotatE scores for {len(fastrp_candidates)} candidates...")
+        # Step 7: Score RotatE for each candidate
+        # When using FastRP fallback, score ALL novel drugs via RotatE and pick top-K
+        candidates_to_score = fastrp_candidates if use_fastrp else fastrp_candidates
+        print(f"  [step 7] Adding RotatE scores for {len(candidates_to_score)} candidates...")
         scored = []
-        for item in fastrp_candidates:
+        for item in candidates_to_score:
             drug_name    = item["name"]
             fastrp_score = item["score"]
 
@@ -151,7 +163,11 @@ class NovelLinkPredictor:
                 # Legacy fallback: cosine similarity
                 rotate_score = self._rotate_cosine(drug_name, disease_name)
 
-            ensemble = W_ROTATE * rotate_score + W_FASTRP * fastrp_score
+            # When no FastRP, weight is entirely on RotatE
+            if use_fastrp:
+                ensemble = W_ROTATE * rotate_score + W_FASTRP * fastrp_score
+            else:
+                ensemble = rotate_score
 
             scored.append({
                 "drug":          drug_name,

@@ -31,7 +31,7 @@ groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 API_BASE = os.getenv("API_BASE_URL", "http://localhost:8000")
 
 # ── Model ─────────────────────────────────────────────────────────────────────
-GROQ_MODEL = "groq/compound"
+GROQ_MODEL = "qwen/qwen3.6-27b"
 
 # ── System prompt ─────────────────────────────────────────────────────────────
 SYSTEM_PROMPT = """You are a drug discovery assistant powered by a biomedical knowledge graph (PrimeKG, 120,000+ nodes, 8M+ edges).
@@ -81,7 +81,8 @@ def detect_intent(user_message: str) -> dict:
         max_tokens=200,
     )
     content = response.choices[0].message.content or ""
-    raw = content.strip()
+    import re
+    raw = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
     # Strip markdown code fences if present
     if raw.startswith("```"):
         raw = raw.split("```")[1]

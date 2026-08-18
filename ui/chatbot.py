@@ -31,7 +31,7 @@ groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 API_BASE = os.getenv("API_BASE_URL", "http://localhost:8000")
 
 # ── Model ─────────────────────────────────────────────────────────────────────
-GROQ_MODEL = "llama3-70b-8192"
+GROQ_MODEL = "openai/gpt-oss-20b"
 
 # ── System prompt ─────────────────────────────────────────────────────────────
 SYSTEM_PROMPT = """You are a drug discovery assistant powered by a biomedical knowledge graph (PrimeKG, 120,000+ nodes, 8M+ edges).
